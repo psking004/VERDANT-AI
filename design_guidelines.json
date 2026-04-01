@@ -1,0 +1,76 @@
+{
+  "theme": "LIGHT",
+  "archetype": "1_Organic_Earthy",
+  "domain": "AgTech Platform (Verdant)",
+  "color_palette": {
+    "primary": "#064E3B",
+    "primary_foreground": "#FFFFFF",
+    "accent_success": "#10B981",
+    "accent_success_foreground": "#FFFFFF",
+    "background": "#F8FAFC",
+    "surface": "#FFFFFF",
+    "border": "#E2E8F0",
+    "text_main": "#0F172A",
+    "text_muted": "#64748B",
+    "destructive": "#EF4444",
+    "destructive_foreground": "#FFFFFF"
+  },
+  "typography": {
+    "heading_font": "Outfit, sans-serif",
+    "body_font": "IBM Plex Sans, sans-serif",
+    "h1": "text-4xl sm:text-5xl tracking-tight font-semibold text-slate-900",
+    "h2": "text-2xl sm:text-3xl tracking-tight font-medium text-slate-900",
+    "h3": "text-xl sm:text-2xl font-medium text-slate-800",
+    "body": "text-base leading-relaxed text-slate-600",
+    "overline": "text-xs tracking-[0.2em] uppercase text-slate-500 font-semibold"
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. Containers use padding p-6 or p-8 to prevent collision.",
+    "dashboard_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6. Control Room style density.",
+    "cards": "Flat design, no drop shadows. Use bg-white with 1px solid border-slate-200. rounded-xl.",
+    "navigation": "Sidebar navigation (w-64) with Forest Green background (#064E3B). Top header for language switcher and mobile nav."
+  },
+  "components": {
+    "buttons": "Flat, rounded-lg, slight translate-y on hover. Primary is Forest Green, Success actions are Vibrant Green.",
+    "inputs": "Shadcn defaults customized with 1px border-slate-200, focus:ring-2 focus:ring-accent_success.",
+    "badges": "Pill-shaped (rounded-full), soft background (e.g., bg-green-100) with dark text (text-green-800)."
+  },
+  "pages": {
+    "dashboard": {
+      "path": "/",
+      "description": "Main Dashboard. Left col: Climate & Soil widgets. Center/Right col span: Profit Predictor Chart. Bottom: Pest Monitoring.",
+      "features": ["Climate Widget (Moranapalli, TN)", "Soil Health Card (NPK/pH)", "Dynamic Profit Predictor (Recharts, Hybrid Tomato vs Rice)", "Local Pest Monitoring (Fall Armyworm alert)"]
+    },
+    "action_plan": {
+      "path": "/action-plan",
+      "description": "Personalized Farmer Plan generator.",
+      "features": ["Land Size & Budget Form", "Gantt Chart/Timeline for Soil Prep, Planting, Harvest"]
+    },
+    "marketplace": {
+      "path": "/marketplace",
+      "description": "Verified Marketplace with e-commerce grid.",
+      "features": ["Search & Filters (Category, Rating, Verified Only)", "Product Cards (Seeds, Fertilizers, Tractors)", "Certified Trust Badges", "Cart & Checkout Flow"]
+    },
+    "settings": {
+      "path": "/help-and-settings",
+      "description": "User Profile and App Settings.",
+      "features": ["Language Switcher (English, Tamil, Hindi, Spanish, Mandarin)", "Notification Toggles", "Large 'Restart App Tutorial' Button"]
+    }
+  },
+  "media_urls": {
+    "marketplace_tractor": "https://images.unsplash.com/photo-1774351922923-f12a07b538f0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2MzR8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjByZWQlMjB0cmFjdG9yJTIwZmllbGR8ZW58MHx8fHwxNzc1MDM1NzE3fDA&ixlib=rb-4.1.0&q=85",
+    "marketplace_seeds": "https://images.pexels.com/photos/14300545/pexels-photo-14300545.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "marketplace_fertilizer": "https://images.unsplash.com/photo-1768264312532-7780b660b74a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwyfHxvcmdhbmljJTIwZmVydGlsaXplciUyMHNvaWx8ZW58MHx8fHwxNzc1MDM1NzIwfDA&ixlib=rb-4.1.0&q=85",
+    "dashboard_nature_hero": "https://images.unsplash.com/photo-1609412058473-c199497c3c5d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHwyfHxsdXNoJTIwZ3JlZW4lMjBmYXJtJTIwbGFuZHNjYXBlfGVufDB8fHx8MTc3NTAzNTcxNnww&ixlib=rb-4.1.0&q=85"
+  },
+  "instructions_to_main_agent": [
+    "Install dependencies: lucide-react, recharts, react-joyride, i18next, react-i18next, react-router-dom, framer-motion.",
+    "Set up global layout with a persistent Sidebar and Header (containing the Language Switcher using placeholder translations).",
+    "Initialize React-Joyride in the root App/Layout wrapper. Target elements using specific classes or IDs for the Navigation, Profit Graph, and Marketplace.",
+    "Use Recharts (LineChart) for the Dynamic Profit Predictor. Provide mock data for 'Hybrid Tomato' and 'Rice' toggles.",
+    "Build the Action Plan Gantt chart / Timeline strictly using HTML/CSS or a simple list if complex timeline is overkill, ensuring it remains highly responsive.",
+    "For the Marketplace, construct a robust e-commerce UI grid with standard filtering state (Category, Rating, Verified). Provide a placeholder Cart/Checkout state.",
+    "All interactive elements MUST include data-testid attributes formatted as kebab-case role-based names (e.g., data-testid='buy-button-tractor').",
+    "Strictly adhere to the Light Theme & Organic/Earthy archetype colors provided. No heavy gradients, just soft borders and tactile, earthy backgrounds."
+  ]
+}
