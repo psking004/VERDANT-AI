@@ -1,52 +1,87 @@
-import { useEffect } from "react";
-import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { useEffect, useState } from 'react';
+import './App.css';
+import './i18n';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { Joyride } from 'react-joyride';
+import Layout from './components/Layout';
+import Dashboard from './pages/Dashboard';
+import ActionPlan from './pages/ActionPlan';
+import Marketplace from './pages/Marketplace';
+import Settings from './pages/Settings';
+import PaymentSuccess from './pages/PaymentSuccess';
+import Guidebook from './pages/Guidebook';
+import { Toaster } from './components/ui/sonner';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const tourSteps = [
+  {
+    target: '[data-tour="navigation"]',
+    content: 'Welcome to Verdant! Use this navigation to explore different sections of your farm management platform.',
+    disableBeacon: true,
+  },
+  {
+    target: '[data-tour="profit-graph"]',
+    content: 'Track your projected profits with our interactive profit predictor. Switch between different crops to compare earnings.',
+  },
+  {
+    target: '[data-tour="marketplace"]',
+    content: 'Access our verified marketplace to purchase seeds, fertilizers, and rent equipment from trusted suppliers.',
+  },
+];
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
+function App() {
+  const { i18n } = useTranslation();
+  const [runTour, setRunTour] = useState(false);
+
+  useEffect(() => {
+    const tourCompleted = localStorage.getItem('verdant_tour_completed');
+    if (!tourCompleted) {
+      setTimeout(() => setRunTour(true), 1000);
+    }
+  }, []);
+
+  const handleJoyrideCallback = (data) => {
+    const { status } = data;
+    if (status === 'finished' || status === 'skipped') {
+      localStorage.setItem('verdant_tour_completed', 'true');
+      setRunTour(false);
     }
   };
 
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
+  const restartTour = () => {
+    localStorage.removeItem('verdant_tour_completed');
+    setRunTour(true);
+  };
 
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
-
-function App() {
   return (
     <div className="App">
+      <Joyride
+        steps={tourSteps}
+        run={runTour}
+        continuous
+        showProgress
+        showSkipButton
+        callback={handleJoyrideCallback}
+        styles={{
+          options: {
+            primaryColor: '#064E3B',
+            zIndex: 10000,
+          },
+        }}
+      />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
+          <Route path="/" element={<Layout restartTour={restartTour} />}>
+            <Route index element={<Dashboard />} />
+            <Route path="action-plan" element={<ActionPlan />} />
+            <Route path="marketplace" element={<Marketplace />} />
+            <Route path="help-and-settings" element={<Settings restartTour={restartTour} />} />
+            <Route path="guidebook" element={<Guidebook />} />
+            <Route path="payment-success" element={<PaymentSuccess />} />
           </Route>
         </Routes>
       </BrowserRouter>
+      <Toaster position="top-right" />
     </div>
   );
 }
