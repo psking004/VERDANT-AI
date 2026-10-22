@@ -27,6 +27,7 @@ next-env.d.ts
 
 # Production builds
 /build
+frontend/build/
 dist/
 dist
 
@@ -79,8 +80,12 @@ agenthub/agents/youtube/db
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/-e 
-# Environment files
+android-sdk/
+
+# Environment files (keep the examples)
+.env
 *.env
+.env.*
 *.env.*
+!.env.example
 frontend/node_modules/.cache/default-development/0.pack

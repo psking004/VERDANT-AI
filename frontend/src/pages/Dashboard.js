@@ -5,7 +5,7 @@ import { Cloud, Droplets, AlertTriangle, TrendingUp } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { toast } from 'sonner';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:8001' : '');
 const API = `${BACKEND_URL}/api`;
 
 const Dashboard = () => {

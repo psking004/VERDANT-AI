@@ -4,7 +4,7 @@ import axios from 'axios';
 import { CheckCircle, Loader2 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL ?? (process.env.NODE_ENV === 'development' ? 'http://localhost:8001' : '');
 const API = `${BACKEND_URL}/api`;
 
 const PaymentSuccess = () => {
@@ -20,6 +20,7 @@ const PaymentSuccess = () => {
     } else {
       setStatus('error');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const pollPaymentStatus = async (sessionId, attempts = 0) => {

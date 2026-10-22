@@ -16,9 +16,9 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[os.environ.get('DB_NAME', 'verdant_ai')]
 
 # API Keys
 OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY')
@@ -487,10 +487,34 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=[o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',') if o.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+# Production: serve the React build (frontend/build) from this server when it exists,
+# so one service can host both. Set FRONTEND_BUILD_DIR to override the location.
+FRONTEND_BUILD_DIR = Path(os.environ.get('FRONTEND_BUILD_DIR', ROOT_DIR.parent / 'frontend' / 'build'))
+if (FRONTEND_BUILD_DIR / 'index.html').is_file():
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/static", StaticFiles(directory=FRONTEND_BUILD_DIR / 'static'), name="static")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (FRONTEND_BUILD_DIR / full_path).resolve()
+        if full_path and candidate.is_file() and FRONTEND_BUILD_DIR.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_BUILD_DIR / 'index.html')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -501,3 +525,9 @@ logger = logging.getLogger(__name__)
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("server:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8001)))
