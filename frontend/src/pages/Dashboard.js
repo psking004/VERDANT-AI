@@ -25,22 +25,23 @@ const Dashboard = () => {
   }, [selectedCrop]);
 
   const fetchDashboardData = async () => {
-    try {
-      const [weatherRes, soilRes, pestRes] = await Promise.all([
-        axios.get(`${API}/weather`),
-        axios.get(`${API}/soil-health`),
-        axios.get(`${API}/pest-alerts`),
-      ]);
+    // allSettled: one failing source (e.g. live weather down) shouldn't blank the whole dashboard
+    const [weatherRes, soilRes, pestRes] = await Promise.allSettled([
+      axios.get(`${API}/weather`),
+      axios.get(`${API}/soil-health`),
+      axios.get(`${API}/pest-alerts`),
+    ]);
 
-      setWeather(weatherRes.data);
-      setSoilHealth(soilRes.data);
-      setPestAlerts(pestRes.data);
-      setLoading(false);
-    } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      toast.error('Failed to load dashboard data');
-      setLoading(false);
+    if (weatherRes.status === 'fulfilled') setWeather(weatherRes.value.data);
+    if (soilRes.status === 'fulfilled') setSoilHealth(soilRes.value.data);
+    if (pestRes.status === 'fulfilled') setPestAlerts(pestRes.value.data);
+
+    const failed = [weatherRes, soilRes, pestRes].filter((r) => r.status === 'rejected');
+    if (failed.length) {
+      failed.forEach((f) => console.error('Error fetching dashboard data:', f.reason));
+      toast.error(weatherRes.status === 'rejected' ? 'Live weather is unavailable right now' : 'Some dashboard data failed to load');
     }
+    setLoading(false);
   };
 
   const fetchProfitData = async (crop) => {
@@ -78,21 +79,24 @@ const Dashboard = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-slate-600">Location</span>
-              <span className="font-semibold text-slate-900">Moranapalli, Tamil Nadu</span>
+              <span className="font-semibold text-slate-900">{weather?.location ?? 'Moranapalli, Hosur, Tamil Nadu'}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-600">Temperature</span>
-              <span className="font-semibold text-slate-900" data-testid="temperature">{weather?.temperature}°C</span>
+              <span className="font-semibold text-slate-900" data-testid="temperature">{weather?.temperature ?? '—'}°C</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-600">Humidity</span>
-              <span className="font-semibold text-slate-900" data-testid="humidity">{weather?.humidity}%</span>
+              <span className="font-semibold text-slate-900" data-testid="humidity">{weather?.humidity ?? '—'}%</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-600">Condition</span>
-              <span className="font-semibold text-slate-900 capitalize">{weather?.description}</span>
+              <span className="font-semibold text-slate-900 capitalize">{weather?.description ?? '—'}</span>
             </div>
           </div>
+          {weather?.source && (
+            <p className="mt-3 text-xs text-slate-400">Live data: {weather.source}{weather.observed_at ? ` · ${weather.observed_at.replace('T', ' ')}` : ''}</p>
+          )}
 
           {weather?.alert && (
             <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-2">
@@ -211,28 +215,40 @@ const Dashboard = () => {
           Local Pest Monitoring
         </h3>
 
-        {pestAlerts.map((alert, index) => (
-          <div
-            key={index}
-            className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3"
-            data-testid={`pest-alert-${index}`}
-          >
-            <div className="p-2 bg-red-100 rounded-full">
-              <AlertTriangle className="text-red-600" size={20} />
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="font-semibold text-red-900">{alert.pest_name}</span>
-                <span className="px-2 py-1 bg-red-600 text-white text-xs rounded-full uppercase">
-                  {alert.risk_level} Risk
-                </span>
+        <p className="text-xs text-slate-500 mb-4">
+          Rule-based risk from the 7-day weather forecast (temperature, humidity, rain thresholds). An early warning to scout your field, not a diagnosis.
+        </p>
+
+        <div className="space-y-3">
+          {pestAlerts.map((alert, index) => {
+            const tone = {
+              high: { box: 'bg-red-50 border-red-200', icon: 'bg-red-100 text-red-600', title: 'text-red-900', pill: 'bg-red-600', text: 'text-red-700' },
+              moderate: { box: 'bg-amber-50 border-amber-200', icon: 'bg-amber-100 text-amber-600', title: 'text-amber-900', pill: 'bg-amber-500', text: 'text-amber-800' },
+              low: { box: 'bg-slate-50 border-slate-200', icon: 'bg-slate-100 text-slate-500', title: 'text-slate-800', pill: 'bg-slate-400', text: 'text-slate-600' },
+            }[alert.risk_level] || {};
+            return (
+              <div
+                key={alert.pest_name}
+                className={`p-4 border rounded-lg flex items-start gap-3 ${tone.box}`}
+                data-testid={`pest-alert-${index}`}
+              >
+                <div className={`p-2 rounded-full ${tone.icon}`}>
+                  <AlertTriangle size={20} />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`font-semibold ${tone.title}`}>{alert.pest_name}</span>
+                    <span className="text-xs text-slate-500">({alert.crop})</span>
+                    <span className={`px-2 py-1 text-white text-xs rounded-full uppercase ${tone.pill}`}>
+                      {alert.risk_level} Risk
+                    </span>
+                  </div>
+                  <p className={`text-sm ${tone.text}`}>{alert.description}</p>
+                </div>
               </div>
-              <p className="text-sm text-red-700">
-                {alert.description} - Detected in a {alert.radius_km}km radius
-              </p>
-            </div>
-          </div>
-        ))}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

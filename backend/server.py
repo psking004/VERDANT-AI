@@ -9,8 +9,11 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
-import httpx
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+import stripe
+from starlette.concurrency import run_in_threadpool
+
+import weather as wx
+import pest_risk
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -20,20 +23,38 @@ mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ.get('DB_NAME', 'verdant_ai')]
 
-# API Keys
-OPENWEATHER_API_KEY = os.environ.get('OPENWEATHER_API_KEY')
+# Stripe (official library). Keys come from the environment only.
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
+# Optional: fixed public URL of the frontend, used for Stripe success/cancel redirects
+PUBLIC_APP_URL = os.environ.get('PUBLIC_APP_URL', '').rstrip('/')
 
 # Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 # Pydantic Models
+class ForecastDay(BaseModel):
+    date: str
+    description: str
+    temp_max: Optional[float] = None
+    temp_min: Optional[float] = None
+    rain_mm: Optional[float] = None
+    rain_probability: Optional[float] = None
+    humidity_mean: Optional[float] = None
+
 class WeatherData(BaseModel):
     temperature: float
     humidity: float
     description: str
     alert: Optional[str] = None
+    location: str
+    latitude: float
+    longitude: float
+    wind_speed_kmh: Optional[float] = None
+    observed_at: Optional[str] = None
+    source: str = "Open-Meteo"
+    forecast: List[ForecastDay] = []
 
 class SoilHealthData(BaseModel):
     nitrogen: float
@@ -48,9 +69,12 @@ class ProfitPrediction(BaseModel):
 
 class PestAlert(BaseModel):
     pest_name: str
-    risk_level: str
-    radius_km: int
+    crop: str
+    risk_level: str  # low | moderate | high
+    favourable_days: int
+    forecast_days: int
     description: str
+    method: str
 
 class ActionPlanInput(BaseModel):
     land_size: float
@@ -112,40 +136,31 @@ class UserSettings(BaseModel):
     notifications_enabled: bool = True
     tour_completed: bool = False
 
-# Weather API
+# Weather API (Open-Meteo, no key needed)
 @api_router.get("/weather", response_model=WeatherData)
-async def get_weather(lat: float = 13.0827, lon: float = 80.2707):
-    """Get real-time weather data for location (default: Moranapalli, Tamil Nadu)"""
+async def get_weather(lat: float = wx.DEFAULT_LAT, lon: float = wx.DEFAULT_LON, location: Optional[str] = None):
+    """Live weather + 7-day forecast. Default location: Moranapalli, Hosur (12.73 N, 77.78 E)."""
     try:
-        async with httpx.AsyncClient() as http_client:
-            response = await http_client.get(
-                "https://api.openweathermap.org/data/2.5/weather",
-                params={
-                    "lat": lat,
-                    "lon": lon,
-                    "appid": OPENWEATHER_API_KEY,
-                    "units": "metric"
-                },
-                timeout=10
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            return WeatherData(
-                temperature=data["main"]["temp"],
-                humidity=data["main"]["humidity"],
-                description=data["weather"][0]["description"],
-                alert="Upcoming Monsoon" if data["main"]["humidity"] > 70 else None
-            )
-    except Exception as e:
-        logging.error(f"Weather API error: {str(e)}")
-        # Return mock data on error
-        return WeatherData(
-            temperature=28.5,
-            humidity=75,
-            description="partly cloudy",
-            alert="Upcoming Monsoon"
-        )
+        data = await wx.fetch_forecast(lat, lon)
+    except wx.WeatherUnavailable as e:
+        logging.error(str(e))
+        raise HTTPException(status_code=503, detail="Live weather is temporarily unavailable")
+
+    cur = data.get("current", {})
+    rows = wx.daily_rows(data)
+    is_default = (lat, lon) == (wx.DEFAULT_LAT, wx.DEFAULT_LON)
+    return WeatherData(
+        temperature=cur.get("temperature_2m"),
+        humidity=cur.get("relative_humidity_2m"),
+        description=wx.describe(cur.get("weather_code")),
+        alert=wx.weather_alert(rows),
+        location=location or (wx.DEFAULT_LOCATION_NAME if is_default else f"{lat:.2f}, {lon:.2f}"),
+        latitude=data.get("latitude", lat),
+        longitude=data.get("longitude", lon),
+        wind_speed_kmh=cur.get("wind_speed_10m"),
+        observed_at=cur.get("time"),
+        forecast=rows,
+    )
 
 # Soil Health API
 @api_router.get("/soil-health", response_model=SoilHealthData)
@@ -184,18 +199,16 @@ async def get_profit_predictions(crop: str = "Hybrid Tomato"):
     
     return ProfitPrediction(crop=crop, data=data)
 
-# Pest Alerts API
+# Pest Alerts API — rule-based risk from the live forecast (see pest_risk.py)
 @api_router.get("/pest-alerts", response_model=List[PestAlert])
-async def get_pest_alerts():
-    """Get local pest monitoring alerts"""
-    return [
-        PestAlert(
-            pest_name="Fall Armyworm",
-            risk_level="high",
-            radius_km=10,
-            description="High infestation detected in nearby fields"
-        )
-    ]
+async def get_pest_alerts(lat: float = wx.DEFAULT_LAT, lon: float = wx.DEFAULT_LON):
+    """Weather-driven pest/disease risk for the next 7 days. Rule-based thresholds, not ML."""
+    try:
+        data = await wx.fetch_forecast(lat, lon)
+    except wx.WeatherUnavailable as e:
+        logging.error(str(e))
+        raise HTTPException(status_code=503, detail="Pest risk needs the weather forecast, which is temporarily unavailable")
+    return pest_risk.assess(wx.daily_rows(data))
 
 # Action Plan APIs
 @api_router.post("/action-plans", response_model=ActionPlan)
@@ -347,117 +360,122 @@ async def get_cart(cart_id: str):
         cart["updated_at"] = datetime.fromisoformat(cart["updated_at"])
     return cart
 
-# Payment APIs
+# Payment APIs — official Stripe Python library (stripe.checkout.Session)
+def _require_stripe():
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Payments are not configured (set STRIPE_API_KEY)")
+
+
 @api_router.post("/marketplace/checkout")
-async def create_checkout_session(request: CheckoutRequest, http_request: Request):
-    """Create Stripe checkout session"""
+async def create_checkout_session(request: CheckoutRequest):
+    """Create a Stripe Checkout session for the cart (prices are read from the DB, never the client)."""
+    _require_stripe()
+    cart = await db.carts.find_one({"id": request.cart_id}, {"_id": 0})
+    if not cart:
+        raise HTTPException(status_code=404, detail="Cart not found")
+
+    line_items = []
+    total_amount = 0.0
+    for item in cart.get("items", []):
+        if item.get("quantity", 0) <= 0:
+            continue
+        product = await db.products.find_one({"id": item["product_id"]}, {"_id": 0})
+        if not product:
+            continue
+        total_amount += product["price"] * item["quantity"]
+        line_items.append({
+            "price_data": {
+                "currency": "inr",
+                "product_data": {"name": product["name"]},
+                "unit_amount": int(round(product["price"] * 100)),  # paise
+            },
+            "quantity": item["quantity"],
+        })
+    if not line_items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+
+    origin = PUBLIC_APP_URL or request.origin_url.rstrip('/')
+    if not origin.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid origin_url")
+
     try:
-        # Get cart
-        cart = await db.carts.find_one({"id": request.cart_id}, {"_id": 0})
-        if not cart:
-            raise HTTPException(status_code=404, detail="Cart not found")
-        
-        # Calculate total
-        total_amount = 0.0
-        for item in cart["items"]:
-            product = await db.products.find_one({"id": item["product_id"]}, {"_id": 0})
-            if product:
-                total_amount += product["price"] * item["quantity"]
-        
-        # Initialize Stripe
-        host_url = str(http_request.base_url)
-        webhook_url = f"{host_url}api/webhook/stripe"
-        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-        
-        # Create checkout session
-        success_url = f"{request.origin_url}/payment-success?session_id={{{{CHECKOUT_SESSION_ID}}}}"
-        cancel_url = f"{request.origin_url}/marketplace"
-        
-        checkout_request = CheckoutSessionRequest(
-            amount=total_amount,
-            currency="inr",
-            success_url=success_url,
-            cancel_url=cancel_url,
-            metadata={"cart_id": request.cart_id}
+        session = await run_in_threadpool(
+            stripe.checkout.Session.create,
+            api_key=STRIPE_API_KEY,
+            mode="payment",
+            line_items=line_items,
+            success_url=f"{origin}/payment-success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{origin}/marketplace",
+            metadata={"cart_id": request.cart_id},
         )
-        
-        session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
-        
-        # Create payment transaction
-        transaction = PaymentTransaction(
-            session_id=session.session_id,
-            amount=total_amount,
-            currency="inr",
-            payment_status="pending",
-            cart_id=request.cart_id,
-            metadata={"cart_id": request.cart_id}
-        )
-        
-        transaction_dict = transaction.model_dump()
-        transaction_dict["created_at"] = transaction_dict["created_at"].isoformat()
-        await db.payment_transactions.insert_one(transaction_dict)
-        
-        return {"url": session.url, "session_id": session.session_id}
-    
-    except Exception as e:
-        logging.error(f"Checkout error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except stripe.StripeError as e:
+        logging.error(f"Stripe checkout error: {e}")
+        raise HTTPException(status_code=502, detail="Could not start checkout with Stripe")
+
+    transaction = PaymentTransaction(
+        session_id=session.id,
+        amount=total_amount,
+        currency="inr",
+        payment_status="pending",
+        cart_id=request.cart_id,
+        metadata={"cart_id": request.cart_id},
+    )
+    transaction_dict = transaction.model_dump()
+    transaction_dict["created_at"] = transaction_dict["created_at"].isoformat()
+    await db.payment_transactions.insert_one(transaction_dict)
+
+    return {"url": session.url, "session_id": session.id}
+
+
+async def _mark_paid(session_id: str):
+    await db.payment_transactions.update_one(
+        {"session_id": session_id, "payment_status": {"$ne": "paid"}},
+        {"$set": {"payment_status": "paid"}},
+    )
+
 
 @api_router.get("/payments/status/{session_id}")
-async def get_payment_status(session_id: str, http_request: Request):
-    """Get payment status"""
+async def get_payment_status(session_id: str):
+    """Read the Checkout session from Stripe and sync our transaction record."""
+    _require_stripe()
     try:
-        host_url = str(http_request.base_url)
-        webhook_url = f"{host_url}api/webhook/stripe"
-        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-        
-        status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
-        
-        # Update transaction if payment is complete
-        transaction = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
-        
-        if transaction and transaction["payment_status"] != "paid" and status.payment_status == "paid":
-            await db.payment_transactions.update_one(
-                {"session_id": session_id},
-                {"$set": {"payment_status": "paid"}}
-            )
-        
-        return {
-            "status": status.status,
-            "payment_status": status.payment_status,
-            "amount_total": status.amount_total,
-            "currency": status.currency
-        }
-    
-    except Exception as e:
-        logging.error(f"Payment status error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        session = await run_in_threadpool(stripe.checkout.Session.retrieve, session_id, api_key=STRIPE_API_KEY)
+    except stripe.InvalidRequestError:
+        raise HTTPException(status_code=404, detail="Checkout session not found")
+    except stripe.StripeError as e:
+        logging.error(f"Stripe status error: {e}")
+        raise HTTPException(status_code=502, detail="Could not reach Stripe")
+
+    if session.payment_status == "paid":
+        await _mark_paid(session_id)
+
+    return {
+        "status": session.status,                  # open | complete | expired
+        "payment_status": session.payment_status,  # paid | unpaid | no_payment_required
+        "amount_total": session.amount_total,      # smallest unit (paise)
+        "currency": session.currency,
+    }
+
 
 @api_router.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks"""
+    """Stripe webhook. Requires STRIPE_WEBHOOK_SECRET; unsigned events are rejected."""
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook not configured (set STRIPE_WEBHOOK_SECRET)")
+    payload = await request.body()
+    signature = request.headers.get("Stripe-Signature", "")
     try:
-        body = await request.body()
-        signature = request.headers.get("Stripe-Signature")
-        
-        host_url = str(request.base_url)
-        webhook_url = f"{host_url}api/webhook/stripe"
-        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-        
-        webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        
-        # Update payment transaction
-        if webhook_response.payment_status == "paid":
-            await db.payment_transactions.update_one(
-                {"session_id": webhook_response.session_id},
-                {"$set": {"payment_status": "paid"}}
-            )
-        
-        return {"status": "success"}
-    
-    except Exception as e:
-        logging.error(f"Webhook error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+        event = stripe.Webhook.construct_event(payload, signature, STRIPE_WEBHOOK_SECRET)
+    except (ValueError, stripe.SignatureVerificationError) as e:
+        logging.warning(f"Rejected Stripe webhook: {e}")
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    if event["type"] in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        obj = event["data"]["object"]
+        if obj.get("payment_status") == "paid":
+            await _mark_paid(obj["id"])
+
+    return {"status": "success"}
 
 # Settings APIs
 @api_router.post("/settings", response_model=UserSettings)
